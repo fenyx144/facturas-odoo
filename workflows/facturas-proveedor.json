@@ -1,0 +1,367 @@
+{
+  "id": "FactProveedores1",
+  "name": "Facturas de proveedor → Odoo",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Registro de facturas de proveedor",
+        "formDescription": "Adjunta el comprobante en PDF o imagen.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Comprobante",
+              "fieldType": "file",
+              "multipleFiles": true,
+              "acceptFileTypes": ".pdf,.jpg,.jpeg,.png,.webp",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {
+          "path": "facturas-proveedor",
+          "buttonLabel": "Enviar",
+          "respondWithOptions": {
+            "values": {
+              "formSubmittedText": "Comprobante recibido. Se registrará en Odoo en unos segundos."
+            }
+          }
+        }
+      },
+      "id": "e434b050-5db7-58e1-ae90-3276663edbfc",
+      "name": "Formulario",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        -100
+      ],
+      "webhookId": "45e37a2a-9982-52ab-a535-7152acb58700"
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "has:attachment {factura boleta comprobante invoice}"
+        },
+        "options": {
+          "downloadAttachments": true,
+          "dataPropertyAttachmentsPrefixName": "adjunto_"
+        }
+      },
+      "id": "448539bc-3880-5fd9-8de3-07ae476e2614",
+      "name": "Correo entrante",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const tipos = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];\nconst salida = [];\n\nfor (let i = 0; i < $input.all().length; i++) {\n  const item = $input.all()[i];\n  const desdeCorreo = Boolean(item.json.messageId || item.json.id && item.json.threadId);\n  const remitente = item.json.from?.value?.[0]?.address || null;\n\n  for (const [clave, archivo] of Object.entries(item.binary || {})) {\n    if (!tipos.includes(archivo.mimeType)) continue;\n    const contenido = await this.helpers.getBinaryDataBuffer(i, clave);\n    salida.push({\n      json: {\n        canal: desdeCorreo ? 'correo' : 'formulario',\n        remitente,\n        archivo_nombre: archivo.fileName || `${clave}.${archivo.fileExtension || 'pdf'}`,\n        archivo_mime: archivo.mimeType,\n        archivo_base64: contenido.toString('base64'),\n      },\n      pairedItem: { item: i },\n    });\n  }\n}\n\nreturn salida;"
+      },
+      "id": "c67bb0a0-cce1-5f4c-89a9-1851b9e7e76b",
+      "name": "Preparar archivos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [ { text: \"Extrae los datos de la factura o boleta de proveedor del archivo adjunto. Fechas en formato YYYY-MM-DD. Importes como números, sin símbolos. Moneda en código ISO 4217 (PEN, USD, EUR). Si un dato no aparece, devuelve null.\" }, { inline_data: { mime_type: $json.archivo_mime, data: $json.archivo_base64 } } ] }], generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: {\"type\": \"OBJECT\", \"properties\": {\"ruc_emisor\": {\"type\": \"STRING\", \"nullable\": true}, \"razon_social\": {\"type\": \"STRING\", \"nullable\": true}, \"tipo\": {\"type\": \"STRING\", \"enum\": [\"factura\", \"boleta\"], \"nullable\": true}, \"serie\": {\"type\": \"STRING\", \"nullable\": true}, \"numero\": {\"type\": \"STRING\", \"nullable\": true}, \"fecha\": {\"type\": \"STRING\", \"nullable\": true}, \"fecha_vencimiento\": {\"type\": \"STRING\", \"nullable\": true}, \"moneda\": {\"type\": \"STRING\", \"nullable\": true}, \"base_imponible\": {\"type\": \"NUMBER\", \"nullable\": true}, \"igv\": {\"type\": \"NUMBER\", \"nullable\": true}, \"total\": {\"type\": \"NUMBER\", \"nullable\": true}, \"lineas\": {\"type\": \"ARRAY\", \"items\": {\"type\": \"OBJECT\", \"properties\": {\"descripcion\": {\"type\": \"STRING\"}, \"cantidad\": {\"type\": \"NUMBER\"}, \"precio_unitario\": {\"type\": \"NUMBER\"}, \"subtotal\": {\"type\": \"NUMBER\"}}, \"required\": [\"descripcion\", \"cantidad\", \"precio_unitario\", \"subtotal\"]}}}, \"required\": [\"ruc_emisor\", \"razon_social\", \"tipo\", \"serie\", \"numero\", \"fecha\", \"moneda\", \"base_imponible\", \"igv\", \"total\", \"lineas\"]} } }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "52ee5fab-7c1f-5316-9cab-50214bf1c9fd",
+      "name": "Extraer datos (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const origen = $('Preparar archivos').item.json;\nconst texto = $json.candidates?.[0]?.content?.parts?.[0]?.text;\nif (!texto) throw new Error(`Gemini no devolvió datos para ${origen.archivo_nombre}`);\nconst f = JSON.parse(texto);\n\nconst observaciones = [];\nconst ruc = String(f.ruc_emisor || '').replace(/\\D/g, '');\n\nif (!/^\\d{11}$/.test(ruc)) {\n  observaciones.push('RUC inválido');\n} else {\n  if (!['10', '15', '17', '20'].includes(ruc.slice(0, 2))) observaciones.push('Prefijo de RUC no válido');\n  const pesos = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];\n  const suma = pesos.reduce((s, p, i) => s + p * Number(ruc[i]), 0);\n  let dv = 11 - (suma % 11);\n  if (dv === 10) dv = 0;\n  if (dv === 11) dv = 1;\n  if (dv !== Number(ruc[10])) observaciones.push('Dígito verificador del RUC incorrecto');\n}\n\nconst serie = String(f.serie || '').toUpperCase();\nif (f.tipo === 'factura' && !/^[FE][A-Z0-9]{3}$/.test(serie)) observaciones.push('Serie no corresponde a factura');\nif (f.tipo === 'boleta' && !/^[BE][A-Z0-9]{3}$/.test(serie)) observaciones.push('Serie no corresponde a boleta');\nconst numero = String(f.numero || '').replace(/\\D/g, '').replace(/^0+(?=\\d)/, '');\nif (!numero) observaciones.push('Sin número de comprobante');\n\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(f.fecha || '')) observaciones.push('Fecha no legible');\nelse if (new Date(f.fecha) > new Date()) observaciones.push('Fecha de emisión futura');\n\nconst base = Number(f.base_imponible) || 0;\nconst igv = Number(f.igv) || 0;\nconst total = Number(f.total) || 0;\nif (Math.abs(base + igv - total) > 0.05) observaciones.push('Base más IGV no coincide con el total');\nif (Math.abs(base * 0.18 - igv) > 0.05) observaciones.push('IGV distinto al 18%');\n\nconst lineas = Array.isArray(f.lineas) ? f.lineas : [];\nconst sumaLineas = lineas.reduce((s, l) => s + (Number(l.subtotal) || 0), 0);\nconst lineasCuadran = lineas.length > 0 && Math.abs(sumaLineas - base) <= 0.05;\n\nreturn {\n  json: {\n    ...f,\n    ruc_emisor: ruc,\n    serie,\n    numero,\n    referencia: `${serie}-${numero.padStart(8, '0')}`,\n    moneda: (f.moneda || 'PEN').toUpperCase(),\n    base_imponible: base,\n    igv,\n    total,\n    lineas: lineasCuadran ? lineas : [],\n    estado: observaciones.length ? 'observada' : 'ok',\n    observaciones: observaciones.join('; '),\n    canal: origen.canal,\n    remitente: origen.remitente,\n    archivo_nombre: origen.archivo_nombre,\n    archivo_mime: origen.archivo_mime,\n  },\n};"
+      },
+      "id": "7acf80e5-83a9-5d18-a4c8-b7edd3f339f7",
+      "name": "Validar comprobante",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const cfg = {\n  url: $env.ODOO_URL,\n  db: $env.ODOO_DB,\n  user: $env.ODOO_USER,\n  key: $env.ODOO_API_KEY,\n  publicUrl: $env.ODOO_PUBLIC_URL || $env.ODOO_URL,\n};\nconst rpc = async (service, method, args) => {\n  const res = await this.helpers.httpRequest({\n    method: 'POST',\n    url: `${cfg.url}/jsonrpc`,\n    json: true,\n    body: { jsonrpc: '2.0', method: 'call', params: { service, method, args } },\n  });\n  if (res.error) throw new Error(`Odoo: ${res.error.data?.message || res.error.message}`);\n  return res.result;\n};\nconst uid = await rpc('common', 'login', [cfg.db, cfg.user, cfg.key]);\nif (!uid) throw new Error('Odoo: usuario o API key incorrectos');\nconst odoo = (model, method, args, kwargs = {}) =>\n  rpc('object', 'execute_kw', [cfg.db, uid, cfg.key, model, method, args, kwargs]);\n\nconst f = $json;\nconst rucValido = /^\\d{11}$/.test(f.ruc_emisor);\nconst nombre = f.razon_social || f.ruc_emisor || 'Proveedor sin identificar';\nconst existentes = await odoo('res.partner', 'search_read',\n  [rucValido ? [['vat', '=', f.ruc_emisor]] : [['name', '=ilike', nombre], ['supplier_rank', '>', 0]]],\n  { fields: ['id', 'name'], limit: 1, context: { active_test: false } });\n\nlet partnerId;\nlet proveedorNuevo = false;\n\nif (existentes.length) {\n  partnerId = existentes[0].id;\n} else {\n  const [peru] = await odoo('res.country', 'search_read', [[['code', '=', 'PE']]], { fields: ['id'], limit: 1 });\n  partnerId = await odoo('res.partner', 'create', [{\n    name: nombre,\n    vat: rucValido ? f.ruc_emisor : false,\n    is_company: true,\n    supplier_rank: 1,\n    country_id: peru ? peru.id : false,\n  }]);\n  proveedorNuevo = true;\n}\n\nconst duplicadas = await odoo('account.move', 'search_read', [[\n  ['move_type', '=', 'in_invoice'],\n  ['partner_id', '=', partnerId],\n  ['ref', '=', f.referencia],\n  ['state', '!=', 'cancel'],\n]], { fields: ['id', 'name'], limit: 1 });\n\nreturn {\n  json: {\n    ...f,\n    partner_id: partnerId,\n    proveedor_nuevo: proveedorNuevo,\n    duplicada: duplicadas.length > 0,\n    factura_existente_id: duplicadas[0]?.id || null,\n  },\n};"
+      },
+      "id": "12da7da8-222c-5fda-a77f-74414ace3bc0",
+      "name": "Proveedor y duplicados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9da5a311-2f49-5182-87df-4f966d075497",
+              "leftValue": "={{ $json.duplicada }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d03a4418-a2d1-5a69-9954-8dfd2e8783fb",
+      "name": "¿Duplicada?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "f2b1031a-bd2a-5834-a80d-3e808431fda2",
+      "name": "Ya registrada",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const cfg = {\n  url: $env.ODOO_URL,\n  db: $env.ODOO_DB,\n  user: $env.ODOO_USER,\n  key: $env.ODOO_API_KEY,\n  publicUrl: $env.ODOO_PUBLIC_URL || $env.ODOO_URL,\n};\nconst rpc = async (service, method, args) => {\n  const res = await this.helpers.httpRequest({\n    method: 'POST',\n    url: `${cfg.url}/jsonrpc`,\n    json: true,\n    body: { jsonrpc: '2.0', method: 'call', params: { service, method, args } },\n  });\n  if (res.error) throw new Error(`Odoo: ${res.error.data?.message || res.error.message}`);\n  return res.result;\n};\nconst uid = await rpc('common', 'login', [cfg.db, cfg.user, cfg.key]);\nif (!uid) throw new Error('Odoo: usuario o API key incorrectos');\nconst odoo = (model, method, args, kwargs = {}) =>\n  rpc('object', 'execute_kw', [cfg.db, uid, cfg.key, model, method, args, kwargs]);\n\nconst f = $json;\nconst archivo = $('Preparar archivos').item.json;\n\nconst [impuesto] = await odoo('account.tax', 'search_read', [[\n  ['type_tax_use', '=', 'purchase'],\n  ['amount_type', '=', 'percent'],\n  ['amount', '=', 18],\n  ['price_include', '=', false],\n]], { fields: ['id'], limit: 1 });\nconst impuestos = impuesto ? [[6, 0, [impuesto.id]]] : [[6, 0, []]];\n\nconst [moneda] = await odoo('res.currency', 'search_read',\n  [[['name', '=', f.moneda]]], { fields: ['id'], limit: 1 });\n\nconst lineas = f.lineas.length\n  ? f.lineas.map((l) => [0, 0, {\n      name: l.descripcion,\n      quantity: l.cantidad,\n      price_unit: l.cantidad ? l.subtotal / l.cantidad : l.precio_unitario,\n      tax_ids: impuestos,\n    }])\n  : [[0, 0, { name: `${f.tipo === 'boleta' ? 'Boleta' : 'Factura'} ${f.referencia}`, quantity: 1, price_unit: f.base_imponible, tax_ids: impuestos }]];\n\nconst observaciones = f.observaciones ? [f.observaciones] : [];\nif (!moneda) observaciones.push(`Moneda ${f.moneda} no activa en Odoo`);\n\nconst valores = {\n  move_type: 'in_invoice',\n  partner_id: f.partner_id,\n  ref: f.referencia,\n  invoice_date: /^\\d{4}-\\d{2}-\\d{2}$/.test(f.fecha || '') ? f.fecha : false,\n  invoice_line_ids: lineas,\n  import_source: 'n8n',\n  import_channel: f.canal,\n  import_sender: f.remitente || false,\n  import_execution: String($execution.id),\n};\nif (moneda) valores.currency_id = moneda.id;\nif (/^\\d{4}-\\d{2}-\\d{2}$/.test(f.fecha_vencimiento || '')) valores.invoice_date_due = f.fecha_vencimiento;\nelse if (valores.invoice_date) valores.invoice_date_due = valores.invoice_date;\n\nconst facturaId = await odoo('account.move', 'create', [valores]);\n\nconst [creada] = await odoo('account.move', 'read', [[facturaId]], { fields: ['amount_total'] });\nif (Math.abs(creada.amount_total - f.total) > 0.05) {\n  observaciones.push(`Total en Odoo ${creada.amount_total.toFixed(2)} distinto al del comprobante ${f.total.toFixed(2)}`);\n}\n\nconst estado = observaciones.length ? 'observada' : 'ok';\nawait odoo('account.move', 'write', [[facturaId], {\n  validation_state: estado,\n  validation_notes: observaciones.join('\\n') || false,\n}]);\n\nconst adjuntoId = await odoo('ir.attachment', 'create', [{\n  name: archivo.archivo_nombre,\n  datas: archivo.archivo_base64,\n  mimetype: archivo.archivo_mime,\n  res_model: 'account.move',\n  res_id: facturaId,\n}]);\n\nawait odoo('account.move', 'message_post', [[facturaId]], {\n  body: estado === 'ok'\n    ? `Comprobante importado y validado. Ejecución ${$execution.id}.`\n    : `Comprobante importado con observaciones: ${observaciones.join('; ')}. Ejecución ${$execution.id}.`,\n  attachment_ids: [adjuntoId],\n  message_type: 'comment',\n  subtype_xmlid: 'mail.mt_note',\n  context: { no_new_invoice: true },\n});\nawait odoo('account.move', 'write', [[facturaId], { message_main_attachment_id: adjuntoId }]);\n\nreturn {\n  json: {\n    factura_id: facturaId,\n    referencia: f.referencia,\n    proveedor: f.razon_social,\n    ruc: f.ruc_emisor,\n    proveedor_nuevo: f.proveedor_nuevo,\n    moneda: f.moneda,\n    total_comprobante: f.total,\n    total_odoo: creada.amount_total,\n    estado,\n    observaciones: observaciones.join('; '),\n    canal: f.canal,\n    enlace: `${cfg.publicUrl}/odoo/action-account.action_move_in_invoice_type/${facturaId}`,\n  },\n};"
+      },
+      "id": "803bb486-ffe6-5f2f-88b2-76a5c933e031",
+      "name": "Registrar en Odoo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a4b92e7e-76a9-5698-bc7b-68e2495a1f5e",
+              "leftValue": "={{ $json.estado === 'observada' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cb23b7fe-b7cb-5014-a68e-600155a42009",
+      "name": "¿Observada?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_CANAL }}",
+          "mode": "name"
+        },
+        "text": "=:warning: *Factura observada* {{ $json.referencia }} · {{ $json.proveedor }} (RUC {{ $json.ruc }})\nTotal: {{ $json.moneda }} {{ $json.total_comprobante }}\n{{ $json.observaciones }}\n<{{ $json.enlace }}|Abrir en Odoo>",
+        "otherOptions": {}
+      },
+      "id": "46b874f1-dfd2-58a6-818c-81e827b4792e",
+      "name": "Avisar en Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1920,
+        0
+      ],
+      "webhookId": "a337c539-7639-535d-bd09-ef159dcc0923"
+    }
+  ],
+  "connections": {
+    "Formulario": {
+      "main": [
+        [
+          {
+            "node": "Preparar archivos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Correo entrante": {
+      "main": [
+        [
+          {
+            "node": "Preparar archivos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar archivos": {
+      "main": [
+        [
+          {
+            "node": "Extraer datos (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer datos (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Validar comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar comprobante": {
+      "main": [
+        [
+          {
+            "node": "Proveedor y duplicados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Proveedor y duplicados": {
+      "main": [
+        [
+          {
+            "node": "¿Duplicada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Duplicada?": {
+      "main": [
+        [
+          {
+            "node": "Ya registrada",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar en Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar en Odoo": {
+      "main": [
+        [
+          {
+            "node": "¿Observada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Observada?": {
+      "main": [
+        [
+          {
+            "node": "Avisar en Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "AlertasErrores01",
+    "timezone": "America/Lima"
+  },
+  "pinData": {},
+  "tags": []
+}
