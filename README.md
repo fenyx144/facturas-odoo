@@ -1,4 +1,4 @@
-# Facturas de proveedor → Odoo
+# Facturas de proveedor a Odoo
 
 Registro automático de facturas y boletas de proveedor en Odoo 18 a partir de comprobantes en PDF o imagen. El proceso corre en un flujo de automatización de n8n que usa una API de IA (Google Gemini) para la extracción de datos y registra el resultado en Odoo, de modo que el área contable solo revisa y confirma.
 
@@ -23,6 +23,14 @@ Diagrama editable: [docs/arquitectura.excalidraw](docs/arquitectura.excalidraw),
 8. Ante cualquier error en el proceso, un flujo de alertas envía el detalle por Slack y por correo.
 
 El módulo `facturas_ia` personaliza Contabilidad: las facturas importadas muestran la pestaña Importación (origen, canal, remitente, ejecución, validación y observaciones) y una cinta Observada cuando corresponde. La lista de facturas de proveedor incluye la columna Validación y los filtros Importadas y Observadas.
+
+## Capturas
+
+Facturas registradas en Odoo con datos de ejemplo.
+
+![Lista de facturas de proveedor](docs/capturas/fac_lista.png)
+
+![Factura registrada](docs/capturas/fac_form.png)
 
 ## Requisitos
 
